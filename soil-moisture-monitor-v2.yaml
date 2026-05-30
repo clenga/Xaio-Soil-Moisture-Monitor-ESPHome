@@ -1,0 +1,378 @@
+# ================================================================
+#  XIAO Soil Moisture Sensor – Enhanced ESPHome Configuration v2.1
+#  Board : Seeed Studio XIAO ESP32-C6
+# ----------------------------------------------------------------
+#  Improvements over factory firmware:
+#   ✔ Real moisture percentage (0–100 %) via calibrated ADC
+#   ✔ Raw voltage sensor exposed for easy per-unit calibration
+#   ✔ Battery voltage + battery percentage entity
+#   ✔ Configurable thresholds & sleep durations via substitutions
+#   ✔ Proper HA device classes (moisture, battery, voltage)
+#   ✔ 3× LED blink feedback on manual button press
+#   ✔ First-boot AP mode preserved (no premature deep sleep)
+# ================================================================
+#
+#  CALIBRATION GUIDE (one-time per sensor, ~2 minutes)
+#  ─────────────────────────────────────────────────────
+#  1. Flash this firmware and let the device join your network.
+#  2. Watch the "Soil Moisture Raw (V)" entity in HA:
+#       a) Hold probe in open air / push into completely DRY soil
+#          → note the stable voltage  →  set dry_voltage below
+#       b) Submerge probe in a glass of water / saturated soil
+#          → note the stable voltage  →  set wet_voltage below
+#  3. Update dry_voltage / wet_voltage in substitutions, reflash.
+#
+#  Typical values: dry ≈ 2.70–3.00 V  |  wet ≈ 1.00–1.40 V
+# ================================================================
+
+substitutions:
+  # ── Capacitive probe calibration ─────────────────────────────
+  # HIGH voltage = dry soil, LOW voltage = wet soil (capacitive)
+  dry_voltage: "2.35"          # Voltage in completely dry soil  →  0 %
+  wet_voltage: "1.775"          # Voltage in saturated wet soil   → 100 %
+
+  # ── Moisture status thresholds (%) ───────────────────────────
+  almost_dry_pct: "40"         # Below this → "Almost Dry" (yellow LED)
+  dry_pct: "20"                # Below this → "Dry"        (red LED)
+
+  # ── Adaptive deep-sleep durations ────────────────────────────
+  sleep_normal_s: "28800"      #  8 h  when moisture is Normal
+  sleep_almost_dry_s: "3600"   #  1 h  when Almost Dry
+  sleep_dry_s: "900"           # 15 min when Dry
+
+# ================================================================
+#  ESPHome / Board
+# ================================================================
+esphome:
+  name: soil-moisture-monitor-3
+  friendly_name: Soil Moisture Monitor 3
+  name_add_mac_suffix: false
+  project:
+    name: "xiao.soil-moisture-monitor"
+    version: "2.1"
+  on_boot:
+    priority: 600
+    then:
+      - output.turn_off: gpio_3_output
+      - output.turn_on: gpio_14_output      # Enable sensor power rail / boost converter
+      - light.turn_on:
+          id: pwm_excitation
+          brightness: 68%                   # 200 kHz @ 68% duty – drives capacitive probe
+      - delay: 600ms                        # Let PWM and ADC rail stabilise
+      - if:
+          condition:
+            lambda: 'return !id(wifi_ever_connected);'
+          then:
+            - logger.log: "First boot: preventing deep sleep for WiFi setup"
+            - deep_sleep.prevent: deep_sleep_control
+          else:
+            - wait_until:
+                condition:
+                  wifi.connected:
+                timeout: 30s
+            - script.execute: read_and_sleep
+
+esp32:
+  board: esp32-c6-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  fast_connect: true
+  ap:
+    ssid: "Soil-Moisture-Monitor-3"
+    password: !secret ap_password
+  on_connect:
+    - globals.set:
+        id: wifi_ever_connected
+        value: 'true'
+
+captive_portal:
+
+# ================================================================
+#  Persistent globals
+# ================================================================
+globals:
+  - id: wifi_ever_connected
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+
+# ================================================================
+#  GPIO Outputs
+# ================================================================
+output:
+  - platform: gpio
+    pin: GPIO3
+    id: gpio_3_output
+
+  - platform: gpio
+    pin: GPIO14
+    id: gpio_14_output         # Sensor power / boost converter enable
+
+  - platform: gpio
+    pin: GPIO18                # D10 – Yellow LED (Almost Dry)
+    id: yellow_led_output
+
+  - platform: gpio
+    pin: GPIO19                # D8  – Green LED  (Normal)
+    id: green_led_output
+
+  - platform: gpio
+    pin: GPIO20                # D9  – Red LED    (Dry)
+    id: red_led_output
+
+  - platform: ledc
+    pin: GPIO21                # D3  – Capacitive probe excitation
+    id: pwm_output
+    frequency: 200kHz
+
+# ================================================================
+#  Lights
+# ================================================================
+light:
+  - platform: binary
+    id: yellow_led
+    output: yellow_led_output
+    internal: true
+
+  - platform: binary
+    id: green_led
+    output: green_led_output
+    internal: true
+
+  - platform: binary
+    id: red_led
+    output: red_led_output
+    internal: true
+
+  - platform: monochromatic
+    output: pwm_output
+    id: pwm_excitation
+    internal: true
+    default_transition_length: 0s
+
+# ================================================================
+#  Deep Sleep
+# ================================================================
+deep_sleep:
+  id: deep_sleep_control
+  wakeup_pin:
+    number: GPIO2
+    allow_other_uses: true     # Shared with binary_sensor below
+
+# ================================================================
+#  Sensors
+# ================================================================
+sensor:
+  # ── Raw ADC voltage (diagnostic) ─────────────────────────────
+  # Use this entity to find your dry_voltage / wet_voltage values.
+  # Single ADC declaration on GPIO1 – moisture % is derived from
+  # this reading via the template sensor below (avoids dual-pin error).
+  - platform: adc
+    pin: GPIO1                 # D1 – Soil probe ADC
+    id: soil_raw_voltage
+    name: "Soil Moisture Raw (V)"
+    unit_of_measurement: "V"
+    accuracy_decimals: 3
+    device_class: voltage
+    state_class: measurement
+    entity_category: diagnostic
+    attenuation: 12dB          # 12dB extends ADC range to ~3.1 V (11dB deprecated)
+    update_interval: never
+    icon: "mdi:sine-wave"
+
+  # ── Calibrated moisture percentage ───────────────────────────
+  # Derived from soil_raw_voltage via linear interpolation.
+  # No second ADC pin needed – eliminates the "pin used in multiple
+  # places" validation error.
+  - platform: template
+    id: soil_moisture_pct
+    name: "Soil Moisture"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    device_class: moisture
+    state_class: measurement
+    update_interval: never
+    icon: "mdi:water-percent"
+    lambda: |-
+      if (!id(soil_raw_voltage).has_state()) return NAN;
+      const float dry = ${dry_voltage};
+      const float wet = ${wet_voltage};
+      float pct = (dry - id(soil_raw_voltage).state) / (dry - wet) * 100.0f;
+      if (pct < 0.0f)   pct = 0.0f;
+      if (pct > 100.0f) pct = 100.0f;
+      return pct;
+
+  # ── Battery voltage (diagnostic) ─────────────────────────────
+  # GPIO0 reads the AA battery through an onboard voltage divider.
+  # If reading differs from a multimeter, adjust the multiply value.
+  - platform: adc
+    pin: GPIO0                 # D0 – Battery voltage divider
+    id: battery_voltage
+    name: "Battery Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    device_class: voltage
+    state_class: measurement
+    entity_category: diagnostic
+    attenuation: 12dB
+    update_interval: never
+    icon: "mdi:battery"
+    filters:
+      - multiply: 1.0          # No divider on this board; raw ADC reads battery directly
+
+  # ── Battery percentage ────────────────────────────────────────
+  # Mapped from AA alkaline discharge curve (1.0 V – 1.6 V).
+  - platform: copy
+    source_id: battery_voltage
+    id: battery_pct
+    name: "Battery"
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 0
+    filters:
+      - calibrate_linear:
+          - 1.0 -> 0.0
+          - 1.5 -> 100.0
+      - clamp:
+          min_value: 0.0
+          max_value: 100.0
+
+# ================================================================
+#  Text sensor – human-readable moisture status
+# ================================================================
+text_sensor:
+  - platform: template
+    name: "Soil Status"
+    id: soil_status
+    icon: "mdi:flower"
+    lambda: |-
+      if (!id(soil_moisture_pct).has_state()) return {"Unknown"};
+      float pct = id(soil_moisture_pct).state;
+      if      (pct < ${dry_pct})        return {"Dry"};
+      else if (pct < ${almost_dry_pct}) return {"Almost Dry"};
+      else                              return {"Normal"};
+
+# ================================================================
+#  Button (D2 / GPIO2)
+# ================================================================
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO2
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+      allow_other_uses: true   # Shared with deep_sleep wakeup_pin
+    id: user_button
+    name: "Button"
+    internal: true
+    filters:
+      - delayed_on: 20ms
+    on_multi_click:
+      - timing:
+          - ON for at most 500ms
+          - OFF for at least 300ms
+        then:
+          - logger.log: "Button: instant reading"
+          - script.execute: take_reading
+          - script.wait: take_reading
+          - script.execute: blink_status_led
+
+# ================================================================
+#  Scripts
+# ================================================================
+script:
+  # Take all sensor readings
+  # Note: soil_moisture_pct auto-recalculates from soil_raw_voltage
+  # so update soil_raw_voltage first, then trigger the template.
+  - id: take_reading
+    then:
+      - component.update: soil_raw_voltage
+      - component.update: soil_moisture_pct
+      - component.update: battery_voltage
+      # battery_pct auto-updates as a copy of battery_voltage
+      - component.update: soil_status   # Must come after soil_moisture_pct is updated
+
+  # Flash the LED matching current moisture level (3× blink)
+  - id: blink_status_led
+    then:
+      - light.turn_off: green_led
+      - light.turn_off: yellow_led
+      - light.turn_off: red_led
+      - if:
+          condition:
+            lambda: 'return id(soil_moisture_pct).state < ${dry_pct};'
+          then:
+            - repeat:
+                count: 3
+                then:
+                  - light.turn_on: red_led
+                  - delay: 300ms
+                  - light.turn_off: red_led
+                  - delay: 200ms
+          else:
+            if:
+              condition:
+                lambda: 'return id(soil_moisture_pct).state < ${almost_dry_pct};'
+              then:
+                - repeat:
+                    count: 3
+                    then:
+                      - light.turn_on: yellow_led
+                      - delay: 300ms
+                      - light.turn_off: yellow_led
+                      - delay: 200ms
+              else:
+                - repeat:
+                    count: 3
+                    then:
+                      - light.turn_on: green_led
+                      - delay: 300ms
+                      - light.turn_off: green_led
+                      - delay: 200ms
+
+  # Boot flow: read → indicate → wait for HA sync → sleep
+  - id: read_and_sleep
+    then:
+      - script.execute: take_reading
+      - script.wait: take_reading
+      - script.execute: blink_status_led
+      - script.wait: blink_status_led
+      - delay: 5s              # Allow HA to receive the update over WiFi
+      - if:
+          condition:
+            lambda: 'return id(soil_moisture_pct).state < ${dry_pct};'
+          then:
+            - deep_sleep.enter:
+                id: deep_sleep_control
+                sleep_duration: ${sleep_dry_s}s
+          else:
+            if:
+              condition:
+                lambda: 'return id(soil_moisture_pct).state < ${almost_dry_pct};'
+              then:
+                - deep_sleep.enter:
+                    id: deep_sleep_control
+                    sleep_duration: ${sleep_almost_dry_s}s
+              else:
+                - deep_sleep.enter:
+                    id: deep_sleep_control
+                    sleep_duration: ${sleep_normal_s}s
+
+    
