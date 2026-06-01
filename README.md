@@ -1,11 +1,13 @@
 # ESPHome Configs
 
-Personal ESPHome device configuration for Xaio Soil Moisture Monitor. I found the stock firmware to be too basic and generic. If you have issues getting the xaio esp32-c6 to accept the new firmware, try flashing the same firmware back to back a couple times. Im not exactly sure why this device has been problematic when trying to flash a new revision of the firmware. Even though esphome web states "successful", the device gets stuck and doesnt produce any logs. When this happens I'll simply hold the boot button while pluggin in the USB cable, continue holding the button all the way until the firmware actually starts flashing. Then when the circle starts forming on the esphome web flash screen, only then will I release the boot button. You can kind-of tell when it flashes correctly because the amount of time to flash is like 3 to 7 seconds slower than the failed attempt, and the logs will start producing in the terminal right after successful flash.
+- Personal ESPHome device configuration for Xaio Soil Moisture Monitor. I found the stock firmware to be too basic and generic.
+- I think something in the yaml prior to version 3.5 was causing issues during the flashing procedure so I suggest not using those.
+- This yaml file is a mix of the stock code from seed studio, revisions from myself, and also some fixes and/or suggestions from claude. If that bothers you then feel free not to use the code.
 
 ## Devices
 
 ### XIAO Soil Moisture Monitor
-**File:** `soil-moisture-monitor-v2.yaml`  
+**File:** `soil-moisture-monitor-v3.5.yaml`  
 **Hardware:** Seeed Studio XIAO Soil Moisture Sensor (XIAO ESP32-C6)  
 **Firmware:** v3.x (ESPHome 2026.5.1)
 
