@@ -97,7 +97,10 @@ esp32:
     type: esp-idf
 
 logger:
+
 safe_mode:
+  disabled: True
+
 api:
   encryption:
     key: !secret api_key
@@ -183,12 +186,18 @@ light:
 # ================================================================
 #  Deep Sleep
 # ================================================================
+# ================================================================
+#  Deep Sleep
+# ================================================================
 deep_sleep:
   id: deep_sleep_control
+  run_duration: 120s
+  sleep_duration: 180min
   wakeup_pin:
     number: GPIO2
+    inverted: true          # ← wake on LOW
+    mode: INPUT_PULLUP      # ← pin idles HIGH
     allow_other_uses: true
-
 # ================================================================
 #  Sensors
 # ================================================================

@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.5 - 2026-06-01
+### Changed
+- Fixed Battery Draining too quickly due to not using "mode: INPUT_PULLUP" for the #Deep Sleep settings./
+- Set safe_mode to disabled
+- Set run_duration to set interval
+- Continued Testing over the next 24hours
+
+
 ## v3.x - 2026-05-30
 ### Changed
 - All sleep intervals unified to 1 hour (Dry, Almost Dry, Too Wet) and 8 hours (Normal)
